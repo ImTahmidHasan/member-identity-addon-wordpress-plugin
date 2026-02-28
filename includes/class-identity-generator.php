@@ -1,42 +1,42 @@
 <?php
 class MIA_Identity_Generator {
     public function __construct() {
-        add_action('user_register', [$this, 'generate_identity_on_registration'], 20);
+        add_action('user_register', [$this, 'handle_new_registration'], 20);
     }
 
-    public function generate_identity_on_registration($user_id) {
-        if (get_user_meta($user_id, 'member_identity', true)) return;
+    public function handle_new_registration($user_id) {
+        $this->assign_identity_to_user($user_id);
+    }
 
+    public function assign_identity_to_user($user_id) {
+        // 1. Check if identity already exists
+        if (get_user_meta($user_id, 'member_identity', true)) return false;
+
+        // 2. Get User Role
         $user = get_userdata($user_id);
-        $role = !empty($user->roles) ? $user->roles[0] : 'subscriber';
-        
+        if (!$user || empty($user->roles)) return false;
+        $role = $user->roles[0];
+
+        // 3. Load Role Config
         $settings = get_option('mia_role_settings', []);
-        if (empty($settings[$role]) || empty($settings[$role]['enabled'])) return;
+        if (empty($settings[$role]) || empty($settings[$role]['enabled'])) return false;
 
         $config = $settings[$role];
-        $id = $this->get_next_sequence($role, $config);
 
-        $formatted_id = $this->format_id($id, $config);
-        update_user_meta($user_id, 'member_identity', $formatted_id);
-    }
-
-    private function get_next_sequence($role, $config) {
-        // Atomic increment using WP options API
+        // 4. Atomic Increment
         $all_counters = get_option('mia_counters', []);
-        $current = isset($all_counters[$role]) ? intval($all_counters[$role]) : intval($config['start_number']) - 1;
+        $current_num = isset($all_counters[$role]) ? intval($all_counters[$role]) : intval($config['start_number']) - 1;
+        $next_num = $current_num + 1;
         
-        $next = $current + 1;
-        $all_counters[$role] = $next;
+        $all_counters[$role] = $next_num;
         update_option('mia_counters', $all_counters);
-        
-        return $next;
-    }
 
-    private function format_id($num, $config) {
+        // 5. Format and Save
         $prefix = $config['prefix'] ?? '';
         $year = !empty($config['include_year']) ? date('Y') . '-' : '';
-        $padded = str_pad($num, (int)$config['padding'], '0', STR_PAD_LEFT);
-        
-        return $prefix . $year . $padded;
+        $padded = str_pad($next_num, (int)$config['padding'], '0', STR_PAD_LEFT);
+        $final_id = $prefix . $year . $padded;
+
+        return update_user_meta($user_id, 'member_identity', $final_id);
     }
 }
