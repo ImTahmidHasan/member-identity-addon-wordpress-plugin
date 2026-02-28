@@ -3,7 +3,7 @@ class MIA_Admin_Settings {
     public function __construct() {
         add_action('admin_menu', [$this, 'add_menu']);
         add_action('admin_init', [$this, 'register_settings']);
-        add_action('admin_init', [$this, 'handle_sync']);
+        add_action('admin_init', [$this, 'handle_sync_reset']);
     }
 
     public function add_menu() {
@@ -14,25 +14,46 @@ class MIA_Admin_Settings {
         register_setting('mia_group', 'mia_role_settings');
     }
 
-    public function handle_sync() {
+    public function handle_sync_reset() {
         if (!isset($_GET['mia_action']) || !current_user_can('manage_options')) return;
         check_admin_referer('mia_sync_action');
 
         $gen = new MIA_Identity_Generator();
         $mode = $_GET['mia_action'];
-        $args = ['number' => 50];
+        $settings = get_option('mia_role_settings', []);
+        $all_counters = get_option('mia_counters', []);
+
+        // We process ALL users to ensure the sequence matches the "Start Seq"
+        $users = get_users(['fields' => 'ID', 'orderby' => 'ID', 'order' => 'ASC']);
         
-        if ($mode === 'sync_missing') {
-            $args['meta_query'] = [['key' => 'member_identity', 'compare' => 'NOT EXISTS']];
+        // Reset the counters in memory for this operation
+        $temp_counters = [];
+        foreach($settings as $role_slug => $cfg) {
+            $temp_counters[$role_slug] = intval($cfg['start_number']) - 1;
         }
 
-        $query = new WP_User_Query($args);
         $processed = 0;
-        foreach ($query->get_results() as $u) {
-            if ($gen->assign_identity_to_user($u->ID, ($mode === 'force_update'))) $processed++;
+        foreach ($users as $user_id) {
+            $user = get_userdata($user_id);
+            $role = get_user_meta($user_id, 'role', true) ?: (!empty($user->roles) ? $user->roles[0] : '');
+
+            if (isset($settings[$role]) && $settings[$role]['enabled']) {
+                $temp_counters[$role]++;
+                $new_num = $temp_counters[$role];
+                
+                // Force update with the NEW sequential number
+                if ($gen->assign_identity_to_user($user_id, true, $new_num)) {
+                    $processed++;
+                }
+                
+                // Update the global counter to stay in sync for future new registrations
+                $all_counters[$role] = $new_num;
+            }
         }
 
-        wp_redirect(add_query_arg(['processed' => $processed, 'page' => 'mia-settings'], admin_url('admin.php')));
+        update_option('mia_counters', $all_counters);
+        
+        wp_redirect(add_query_arg(['page' => 'mia-settings', 'synced' => $processed], admin_url('admin.php')));
         exit;
     }
 
@@ -41,13 +62,20 @@ class MIA_Admin_Settings {
         $settings = get_option('mia_role_settings', []);
         ?>
         <div class="wrap">
-            <h1>Identity Configuration</h1>
+            <h1>Identity Control Panel</h1>
+
+            <?php if(isset($_GET['synced'])): ?>
+                <div class="updated notice is-dismissible">
+                    <p>Success! <?php echo intval($_GET['synced']); ?> users have been re-indexed starting from your "Start No." settings.</p>
+                </div>
+            <?php endif; ?>
+
             <form method="post" action="options.php">
                 <?php settings_fields('mia_group'); ?>
                 <table class="wp-list-table widefat fixed striped">
                     <thead>
                         <tr>
-                            <th>Role</th><th>Active</th><th>Prefix</th><th>Year</th><th>Dash (-)</th><th>Padding</th><th>Start</th>
+                            <th>Role</th><th>Active</th><th>Prefix</th><th>Year</th><th>Dash (-)</th><th>Padding</th><th>Start Seq</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -65,15 +93,19 @@ class MIA_Admin_Settings {
                         <?php endforeach; ?>
                     </tbody>
                 </table>
-                <?php submit_button(); ?>
+                <?php submit_button('Save Configuration'); ?>
             </form>
 
-            <div class="card" style="margin-top:20px; padding:15px;">
-                <h2>Legacy Synchronization</h2>
-                <div style="display:flex; gap:10px;">
-                    <a href="<?php echo wp_nonce_url(admin_url('admin.php?page=mia-settings&mia_action=sync_missing'), 'mia_sync_action'); ?>" class="button">Assign Missing IDs</a>
-                    <a href="<?php echo wp_nonce_url(admin_url('admin.php?page=mia-settings&mia_action=force_update'), 'mia_sync_action'); ?>" class="button-secondary button" onclick="return confirm('Update all IDs to current Prefix/Dash settings?');">Force Update Format</a>
-                </div>
+            <div class="card" style="margin-top:20px; padding:20px; border-left: 4px solid #d63638;">
+                <h2 style="color: #d63638;">Full Reset & Re-index</h2>
+                <p>Use this if you changed the <strong>Start Seq</strong> or <strong>Prefix</strong> and want all existing users to follow the new order.</p>
+                <p><em>Warning: This will change the ID of every existing user to match the new sequence.</em></p>
+                
+                <a href="<?php echo wp_nonce_url(admin_url('admin.php?page=mia-settings&mia_action=force_sync_all'), 'mia_sync_action'); ?>" 
+                   class="button button-secondary" 
+                   onclick="return confirm('This will re-calculate every user ID starting from your Start Seq. Are you sure?');">
+                   Reset & Force Sync All Users
+                </a>
             </div>
         </div>
         <?php
