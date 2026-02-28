@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: Member Identity Addon (Refined)
- * Description: Robust identity generation for UM. Assigns unique IDs to new and legacy users.
- * Version: 1.2.0
+ * Plugin Name: Member Identity Addon
+ * Description: Robust identity generation for UM with configurable hyphenation and legacy sync.
+ * Version: 1.3.0
  * Author: Senior Architect
  */
 
